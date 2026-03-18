@@ -3,6 +3,7 @@
 Contrôleur DIY basé sur ESP32 pour automatiser une porte de poulailler coulissante, en récupérant la mécanique d'une porte Omlet Autodoor existante. 
 Intégration Home Assistant possible via MQTT, interface web mobile embarquée, 4 modes de gestion.
 
+![Capture d'écran de l'interface web](https://github.com/bonnoa/retrofit_omlet_automatic_door/blob/15a76a0ba2ad137b84e32b59a12258cbaffb4ce7/ePoule.png)
 ---
 
 ## Contexte
