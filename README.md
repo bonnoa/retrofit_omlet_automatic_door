@@ -1,5 +1,5 @@
 # 🐔 Porte de poulailler automatique — Rétrofit Porte marque Omlet (FR)
-English version available below
+[English version available below](#-automatic-chicken-coop-door--omlet-autodoor-retrofit---english-version)
 
 Contrôleur basé sur ESP32 pour automatiser une porte de poulailler coulissante, en récupérant la mécanique d'une porte Omlet Autodoor existante. 
 Intégration Home Assistant possible via MQTT, interface web mobile embarquée, 4 modes de gestion.
@@ -284,12 +284,14 @@ void loop() {
 Projet personnel DIY — libre de réutilisation et d'adaptation.
 
 
+---
+
 
 # 🐔 Automatic Chicken Coop Door — Omlet Autodoor Retrofit - ENGLISH VERSION
 
 DIY ESP32-based controller to automate a sliding chicken coop door, reusing the mechanics of an existing Omlet Autodoor. Home Assistant integration via MQTT, embedded mobile-first web interface, 4 management modes.
 
-The web version isn't available in English. Feel free to open a new GitHub issue to request it.
+**The web version isn't available in English. Feel free to open a new GitHub issue to request it.**
 
 ---
 
@@ -331,6 +333,8 @@ The door slides **horizontally**: right → left to open, left → right to clos
 ---
 
 ## Software
+
+**The web version isn't available in English. Feel free to open a new GitHub issue to request it.**
 
 ### Project structure
 
