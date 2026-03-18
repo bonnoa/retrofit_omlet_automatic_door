@@ -8,7 +8,7 @@ Intégration Home Assistant possible via MQTT, interface web mobile embarquée, 
 
 ## Contexte
 
-Après deux portes HS (mais moteur Ok), et quelques poules croquées par un renard plus tard... je décide de supprimer le panneau de commande la porte autimatique Omlet pour ne conserver que la mécanique, par contre exit le capteur de pression latérale qui détecte la présence d'un objet (poule ?) sur la route, source de dysfonctionnement fréquent, ce principe sera géré par une surtension détectée sur le moteur.
+Après deux portes HS (mais moteur Ok), et quelques poules croquées par un renard plus tard... je décide de supprimer le panneau de commande la porte automatique Omlet pour ne conserver que la mécanique, par contre exit le capteur de pression latérale qui détecte la présence d'un objet (poule ?) sur la route, source de dysfonctionnement fréquent, ce principe sera géré par une surtension détectée sur le moteur.
 Le projet part d'une porte automatique de la marque Omlet dont on conserve uniquement la mécanique (moteur 014.0077, rail, porte coulissante). L'électronique d'origine est remplacée par un contrôleur ESP32.
 
 La porte coulisse **horizontalement** : droite → gauche pour ouvrir, gauche → droite pour fermer.
