@@ -4,6 +4,8 @@
 Contrôleur basé sur ESP32 pour automatiser une porte de poulailler coulissante, en récupérant la mécanique d'une porte Omlet Autodoor existante. 
 Intégration Home Assistant possible via MQTT, interface web mobile embarquée, 4 modes de gestion.
 
+Le projet peut fonctionner avec n'importe quel autre bricolage de porte DIY.
+
 ![Capture d'écran de l'interface web](https://github.com/bonnoa/retrofit_omlet_automatic_door/blob/15a76a0ba2ad137b84e32b59a12258cbaffb4ce7/ePoule.png)
 ---
 
@@ -40,16 +42,11 @@ La porte coulisse **horizontalement** : droite → gauche pour ouvrir, gauche �
 | Fins de course | MC-38 × 2 | Détection position ouverte/fermée |
 | Capteur courant | ACS712 5A | Détection surcourant / blocage |
 | Capteur luminosité | BH1750 (GY-30) | Mode luminosité + log |
-| Convertisseur | LM2596S | 12V → 5V alimentation ESP32 (finalement pas utilisé dans mon projet) |
+| Convertisseur | LM2596S | 12V → 5V alimentation ESP32 |
 | Alimentation | 12V 2A | Alimentation principale pour le moteur |
-| Alimentation USB | 5V | Alimentation de l'ESP32 et composants associés |
 | Boîtier | 190×150×75 mm IP67 ABS | Protection étanche extérieure |
 | Câble signal | Câble alarme 4×0.22mm² | FDC et BH1750 vers boîtier |
 
-La seule alimentation 12V pour le moteur, le convertisseur LM2596S (12 → 5V) n'est pas suffisante.
-J'ai donc fait le choix de mettre en place 2 alimentations.
-Mais la mise en place d'un condensateur sur la sortie 5V du LM2596S est à tester (pas testé pour ma part)
-— ajouter 470µF à 1000µF / 10V entre la sortie 5V et GND, directement sur les pattes d'alimentation de l'ESP32. 
 
 ---
 
@@ -290,6 +287,8 @@ Projet personnel DIY — libre de réutilisation et d'adaptation.
 # 🐔 Automatic Chicken Coop Door — Omlet Autodoor Retrofit - ENGLISH VERSION
 
 DIY ESP32-based controller to automate a sliding chicken coop door, reusing the mechanics of an existing Omlet Autodoor. Home Assistant integration via MQTT, embedded mobile-first web interface, 4 management modes.
+
+It can works with any DIY door.
 
 **The web version isn't available in English. Feel free to open a new GitHub issue to request it.**
 
