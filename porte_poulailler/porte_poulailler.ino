@@ -15,12 +15,13 @@
  *    - PubSubClient         (Nick O'Leary)
  *    - ArduinoJson          (Benoit Blanchon)
  *    - BH1750               (Christopher Laws)
- *    - ESPAsyncWebServer    (me-no-dev)
- *    - AsyncTCP             (me-no-dev)
+ *    - ESPAsyncWebServer    (ESP32Async)
+ *    - AsyncTCP             (ESP32Async)
  * ============================================================
  */
 
 #include <WiFi.h>
+#include <ArduinoOTA.h>
 #include <Preferences.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
@@ -43,6 +44,10 @@ void commandeFermer();
 void resetErreur();
 void stopUrgence();
 void sauvegarderConfig();
+void publishDiscovery();
+void publishWifi();
+void publishEtat();
+void publishMode();
 
 // ============================================================
 //  CONFIGURATION — À MODIFIER
@@ -61,7 +66,6 @@ const float LATITUDE      = 48.8566;  // Coordonnées GPS pour calcul soleil
 const float LONGITUDE     = 2.3522;
 
 const char* TZ_INFO = "CET-1CEST,M3.5.0,M10.5.0/3";  // France — heure été/hiver automatique
-
 
 // ============================================================
 //  PINS
@@ -85,7 +89,7 @@ const char* TZ_INFO = "CET-1CEST,M3.5.0,M10.5.0/3";  // France — heure été/h
 #define PWM_FREQ        1000
 #define PWM_RESOLUTION  8
 #define PWM_DUTY_9V     191       // ouverture — ~75% → ~9V sur alim 12V
-#define PWM_DUTY_FER    140       // fermeture — ~58% → ~7V (plus doux sur la fermeture "hey poupoule, attention ça ferme")
+#define PWM_DUTY_FER    140       // fermeture — ~58% → ~7V (plus doux)
 
 #define TIMEOUT_OUV_MS   15000    // timeout ouverture (cycle ~7s + marge)
 #define TIMEOUT_FER_MS   20000    // timeout fermeture (cycle ~10s + marge)
@@ -102,6 +106,8 @@ const char* TZ_INFO = "CET-1CEST,M3.5.0,M10.5.0/3";  // France — heure été/h
 #define TOPIC_LUMINOSITE        MQTT_PREFIX "/capteurs/lux"
 #define TOPIC_COURANT           MQTT_PREFIX "/capteurs/courant"
 #define TOPIC_HEURE_SOLEIL      MQTT_PREFIX "/soleil/heures"
+#define TOPIC_RSSI              MQTT_PREFIX "/wifi/rssi"
+#define TOPIC_WIFI              MQTT_PREFIX "/wifi/qualite"
 #define TOPIC_MODE              MQTT_PREFIX "/mode"
 #define TOPIC_CONFIG            MQTT_PREFIX "/config"       // subscribe — JSON complet
 #define MQTT_CLIENT_ID          "esp32_poulailler"
@@ -547,6 +553,37 @@ void gestionHeureFixe() {
   if (!doitEtreOuverte && etatPorte == PORTE_OUVERTE) fermerPorte();
 }
 
+
+// ============================================================
+//  MONITORING WIFI
+// ============================================================
+// Convertit le RSSI (dBm) en qualité (%)
+int wifiQualite(int rssi) {
+  if (rssi <= -100) return 0;
+  if (rssi >= -50)  return 100;
+  return 2 * (rssi + 100);
+}
+
+// Texte descriptif de la qualité du signal
+const char* wifiQualiteTexte(int rssi) {
+  if (rssi >= -50) return "excellent";
+  if (rssi >= -60) return "tres bon";
+  if (rssi >= -70) return "bon";
+  if (rssi >= -80) return "faible";
+  return "tres faible";
+}
+
+void publishWifi() {
+  if (!MQTT_ENABLED) return;
+  if (WiFi.status() != WL_CONNECTED) return;
+  int rssi = WiFi.RSSI();
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%d", rssi);
+  mqtt.publish(TOPIC_RSSI, buf);
+  snprintf(buf, sizeof(buf), "%d", wifiQualite(rssi));
+  mqtt.publish(TOPIC_WIFI, buf);
+}
+
 // ============================================================
 //  MQTT
 // ============================================================
@@ -680,8 +717,10 @@ bool connecterMQTT() {
     mqtt.subscribe(TOPIC_COMMANDE_PORTE);
     mqtt.subscribe(TOPIC_MODE);
     mqtt.subscribe(TOPIC_CONFIG);
+    publishDiscovery();      // auto-déclaration des entités HA
     publishEtat();
     publishMode();
+    publishWifi();
     ignoreRetainUntil = millis() + 3000;  // ignorer les retain pendant 3s
     return true;
   }
@@ -689,9 +728,116 @@ bool connecterMQTT() {
   return false;
 }
 
+
+// ============================================================
+//  MQTT DISCOVERY — Auto-déclaration des entités Home Assistant
+// ============================================================
+// Publie la config sur homeassistant/<type>/<id>/config (retain)
+// HA crée automatiquement les entités. Voir docs MQTT Discovery.
+
+#define HA_PREFIX  "homeassistant"
+#define HA_DEVICE  "\"device\":{\"identifiers\":[\"esp32_poulailler\"],\"name\":\"Porte Poulailler\",\"model\":\"ESP32 Retrofit Omlet\",\"manufacturer\":\"DIY\"}"
+
+void publishDiscovery() {
+  if (!MQTT_ENABLED) return;
+
+  char topic[128];
+  char buf[768];
+
+  // ── Cover (la porte) ───────────────────────────────────────
+  snprintf(topic, sizeof(topic), HA_PREFIX "/cover/poulailler/porte/config");
+  snprintf(buf, sizeof(buf),
+    "{\"name\":\"Porte\",\"unique_id\":\"poulailler_porte\","
+    "\"device_class\":\"door\","
+    "\"command_topic\":\"" TOPIC_COMMANDE_PORTE "\","
+    "\"state_topic\":\"" TOPIC_ETAT_PORTE "\","
+    "\"payload_open\":\"OPEN\",\"payload_close\":\"CLOSE\",\"payload_stop\":\"STOP\","
+    "\"state_open\":\"open\",\"state_closed\":\"closed\","
+    "\"state_opening\":\"opening\",\"state_closing\":\"closing\","
+    "%s}", HA_DEVICE);
+  mqtt.publish(topic, buf, true);
+
+  // ── Select (mode) ──────────────────────────────────────────
+  snprintf(topic, sizeof(topic), HA_PREFIX "/select/poulailler/mode/config");
+  snprintf(buf, sizeof(buf),
+    "{\"name\":\"Mode\",\"unique_id\":\"poulailler_mode\","
+    "\"command_topic\":\"" TOPIC_MODE "\","
+    "\"state_topic\":\"" TOPIC_MODE "\","
+    "\"options\":[\"soleil\",\"luminosite\",\"heure_fixe\",\"manuel\"],"
+    "%s}", HA_DEVICE);
+  mqtt.publish(topic, buf, true);
+
+  // ── Sensor luminosité ──────────────────────────────────────
+  snprintf(topic, sizeof(topic), HA_PREFIX "/sensor/poulailler/lux/config");
+  snprintf(buf, sizeof(buf),
+    "{\"name\":\"Luminosite\",\"unique_id\":\"poulailler_lux\","
+    "\"state_topic\":\"" TOPIC_LUMINOSITE "\","
+    "\"unit_of_measurement\":\"lx\",\"device_class\":\"illuminance\","
+    "%s}", HA_DEVICE);
+  mqtt.publish(topic, buf, true);
+
+  // ── Sensor courant ─────────────────────────────────────────
+  snprintf(topic, sizeof(topic), HA_PREFIX "/sensor/poulailler/courant/config");
+  snprintf(buf, sizeof(buf),
+    "{\"name\":\"Courant moteur\",\"unique_id\":\"poulailler_courant\","
+    "\"state_topic\":\"" TOPIC_COURANT "\","
+    "\"unit_of_measurement\":\"A\",\"device_class\":\"current\","
+    "%s}", HA_DEVICE);
+  mqtt.publish(topic, buf, true);
+
+  // ── Sensor RSSI WiFi ───────────────────────────────────────
+  snprintf(topic, sizeof(topic), HA_PREFIX "/sensor/poulailler/rssi/config");
+  snprintf(buf, sizeof(buf),
+    "{\"name\":\"WiFi RSSI\",\"unique_id\":\"poulailler_rssi\","
+    "\"state_topic\":\"" TOPIC_RSSI "\","
+    "\"unit_of_measurement\":\"dBm\",\"device_class\":\"signal_strength\","
+    "\"entity_category\":\"diagnostic\","
+    "%s}", HA_DEVICE);
+  mqtt.publish(topic, buf, true);
+
+  // ── Sensor qualité WiFi ────────────────────────────────────
+  snprintf(topic, sizeof(topic), HA_PREFIX "/sensor/poulailler/wifi/config");
+  snprintf(buf, sizeof(buf),
+    "{\"name\":\"WiFi qualite\",\"unique_id\":\"poulailler_wifi\","
+    "\"state_topic\":\"" TOPIC_WIFI "\","
+    "\"unit_of_measurement\":\"%%\",\"icon\":\"mdi:wifi\","
+    "\"entity_category\":\"diagnostic\","
+    "%s}", HA_DEVICE);
+  mqtt.publish(topic, buf, true);
+
+  Serial.println("[MQTT] Discovery publié");
+}
+
 // ============================================================
 //  WEBSOCKET — déclarations (implémentation dans web_server.ino)
 // ============================================================
+
+// ============================================================
+//  OTA — Mise à jour sans fil (Over-The-Air)
+// ============================================================
+void setupOTA() {
+  ArduinoOTA.setHostname("poulailler");
+
+  ArduinoOTA.onStart([]() {
+    // Couper le moteur par sécurité pendant la mise à jour
+    ledcWrite(PIN_RPWM, 0);
+    ledcWrite(PIN_LPWM, 0);
+    Serial.println("[OTA] Début de la mise à jour");
+  });
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\n[OTA] Terminé");
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("[OTA] %u%%\r", (progress * 100) / total);
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("[OTA] Erreur %u\n", error);
+  });
+
+  ArduinoOTA.begin();
+  Serial.println("[OTA] Prêt — hostname: poulailler");
+}
+
 // ============================================================
 //  SETUP
 // ============================================================
@@ -719,14 +865,14 @@ void setup() {
   Wire.begin(PIN_SDA, PIN_SCL);
   bh1750.begin() ? Serial.println("[BH1750] OK") : Serial.println("[BH1750] Non trouvé");
 
-  // État initial
+  // Charger la config depuis NVS (mode, offsets, seuils)
+  chargerConfig();
+
+  // État initial — détection position via fins de course
   delay(100);
   if      (digitalRead(PIN_FDC_OUV) == LOW)  { etatPorte = PORTE_OUVERTE; Serial.println("[INIT] Porte OUVERTE (gauche)"); }
   else if (digitalRead(PIN_FDC_FER) == LOW)  { etatPorte = PORTE_FERMEE;  Serial.println("[INIT] Porte FERMÉE (droite)");  }
   else                                        { etatPorte = PORTE_ERREUR;  Serial.println("[INIT] Position inconnue");       }
-
-  // Charger la config depuis NVS
-  chargerConfig();
 
   // WiFi
   Serial.printf("[WiFi] Connexion à %s...", WIFI_SSID);
@@ -759,6 +905,9 @@ void setup() {
   // Serveur web
   setupWebServer();
 
+  // OTA — mise à jour sans fil
+  setupOTA();
+
   publishHeuresSoleil();
   Serial.println("=== Prêt ===");
 }
@@ -767,6 +916,9 @@ void setup() {
 //  LOOP
 // ============================================================
 void loop() {
+  // OTA — écoute les demandes de mise à jour
+  ArduinoOTA.handle();
+
   // MQTT
   if (MQTT_ENABLED) {
     if (!mqtt.connected()) {
@@ -824,7 +976,6 @@ void loop() {
       Serial.println("[TIMEOUT] Fin de course non atteint !");
       if (MQTT_ENABLED) mqtt.publish(TOPIC_ETAT_PORTE, "error", true);
       wsLog("Timeout moteur — vérifier les fins de course", "error");
-      appliquerModePending();
     }
     // ── Surcourant (blocage) ─────────────────────────────
     if (surcourant()) {
@@ -835,7 +986,6 @@ void loop() {
       Serial.println("[SURCOURANT] Blocage détecté !");
       if (MQTT_ENABLED) mqtt.publish(TOPIC_ETAT_PORTE, "error", true);
       wsLog("Surcourant — obstacle détecté, moteur arrêté", "error");
-      appliquerModePending();
     }
   }
 
@@ -862,6 +1012,7 @@ void loop() {
   if (millis() - dernierPublish > 30000) {
     dernierPublish = millis();
     publishCapteurs();
+    publishWifi();
     static unsigned long dernierSoleil = 0;
     if (millis() - dernierSoleil > 3600000) {
       dernierSoleil = millis();
