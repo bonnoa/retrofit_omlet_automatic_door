@@ -48,24 +48,27 @@ void publishDiscovery();
 void publishWifi();
 void publishEtat();
 void publishMode();
+void publishParams();
+void paramModifie();
+void publishHeuresSoleil();
 
 // ============================================================
 //  CONFIGURATION — À MODIFIER
 // ============================================================
 #define MQTT_ENABLED  true   // true = MQTT actif, false = désactivé
 
-const char* WIFI_SSID     = "TON_SSID";
-const char* WIFI_PASSWORD = "TON_MOT_DE_PASSE";
+const char* WIFI_SSID     = "TON_SSID"; // Your WIFI SSID
+const char* WIFI_PASSWORD = "TON_MOT_DE_PASSE"; // Your Paswword
 
-const char* MQTT_SERVER   = "192.168.1.XX";  // IP du broker MQTT
+const char* MQTT_SERVER   = "192.168.1.XX";  // IP du broker MQTT // IP MQTT broker
 const int   MQTT_PORT     = 1883;
 const char* MQTT_USER     = "mqtt_user";
 const char* MQTT_PASS     = "mqtt_password";
 
-const float LATITUDE      = 48.8566;  // Coordonnées GPS pour calcul soleil
+const float LATITUDE      = 48.8566;  // Coordonnées GPS pour calcul soleil // Door ckicken GPS location 
 const float LONGITUDE     = 2.3522;
 
-const char* TZ_INFO = "CET-1CEST,M3.5.0,M10.5.0/3";  // France — heure été/hiver automatique
+const char* TZ_INFO = "CET-1CEST,M3.5.0,M10.5.0/3";  // France — heure été/hiver automatique // Winter/Summer timer France by default
 
 // ============================================================
 //  PINS
@@ -110,6 +113,21 @@ const char* TZ_INFO = "CET-1CEST,M3.5.0,M10.5.0/3";  // France — heure été/h
 #define TOPIC_WIFI              MQTT_PREFIX "/wifi/qualite"
 #define TOPIC_MODE              MQTT_PREFIX "/mode"
 #define TOPIC_CONFIG            MQTT_PREFIX "/config"       // subscribe — JSON complet
+
+// -- État détaillé + fins de course (publish) --
+#define TOPIC_ETAT_TEXTE        MQTT_PREFIX "/porte/etat_texte"
+#define TOPIC_FDC_OUV           MQTT_PREFIX "/fdc/ouvert"
+#define TOPIC_FDC_FER           MQTT_PREFIX "/fdc/ferme"
+
+// -- Paramètres réglables (set = subscribe, state = publish) --
+#define TOPIC_OFFSET_OUV        MQTT_PREFIX "/param/offset_ouv"
+#define TOPIC_OFFSET_FER        MQTT_PREFIX "/param/offset_fer"
+#define TOPIC_LUX_OUV           MQTT_PREFIX "/param/lux_ouv"
+#define TOPIC_LUX_FER           MQTT_PREFIX "/param/lux_fer"
+#define TOPIC_HFX_OUV_H         MQTT_PREFIX "/param/hfx_ouv_h"
+#define TOPIC_HFX_OUV_M         MQTT_PREFIX "/param/hfx_ouv_m"
+#define TOPIC_HFX_FER_H         MQTT_PREFIX "/param/hfx_fer_h"
+#define TOPIC_HFX_FER_M         MQTT_PREFIX "/param/hfx_fer_m"
 #define MQTT_CLIENT_ID          "esp32_poulailler"
 
 // ============================================================
@@ -598,6 +616,35 @@ void publishEtat() {
     default:                   s = "error";   break;
   }
   mqtt.publish(TOPIC_ETAT_PORTE, s, true);
+
+  // État en texte lisible (pour capteur HA)
+  const char* txt;
+  switch (etatPorte) {
+    case PORTE_OUVERTE:        txt = "Ouverte";      break;
+    case PORTE_FERMEE:         txt = "Fermee";       break;
+    case PORTE_EN_OUVERTURE:   txt = "Ouverture...";  break;
+    case PORTE_EN_FERMETURE:   txt = "Fermeture...";  break;
+    default:                   txt = "Erreur";       break;
+  }
+  mqtt.publish(TOPIC_ETAT_TEXTE, txt, true);
+
+  // État des fins de course (ON = actif = aimant présent = LOW)
+  mqtt.publish(TOPIC_FDC_OUV, digitalRead(PIN_FDC_OUV) == LOW ? "ON" : "OFF", true);
+  mqtt.publish(TOPIC_FDC_FER, digitalRead(PIN_FDC_FER) == LOW ? "ON" : "OFF", true);
+}
+
+// Publie l'état de tous les paramètres réglables (pour les entités number HA)
+void publishParams() {
+  if (!MQTT_ENABLED) return;
+  char b[12];
+  snprintf(b, sizeof(b), "%d", offsetOuv);           mqtt.publish(TOPIC_OFFSET_OUV, b, true);
+  snprintf(b, sizeof(b), "%d", offsetFer);           mqtt.publish(TOPIC_OFFSET_FER, b, true);
+  snprintf(b, sizeof(b), "%.0f", luxSeuilOuverture); mqtt.publish(TOPIC_LUX_OUV, b, true);
+  snprintf(b, sizeof(b), "%.0f", luxSeuilFermeture); mqtt.publish(TOPIC_LUX_FER, b, true);
+  snprintf(b, sizeof(b), "%d", heureFixeOuvH);       mqtt.publish(TOPIC_HFX_OUV_H, b, true);
+  snprintf(b, sizeof(b), "%d", heureFixeOuvM);       mqtt.publish(TOPIC_HFX_OUV_M, b, true);
+  snprintf(b, sizeof(b), "%d", heureFixeFerH);       mqtt.publish(TOPIC_HFX_FER_H, b, true);
+  snprintf(b, sizeof(b), "%d", heureFixeFerM);       mqtt.publish(TOPIC_HFX_FER_M, b, true);
 }
 
 void publishMode() {
@@ -652,8 +699,10 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   msg.trim();
   Serial.printf("[MQTT] %s → %s\n", topic, msg.c_str());
 
-  // Ignorer les retain au démarrage (sauf commandes porte)
-  if (millis() < ignoreRetainUntil && String(topic) == TOPIC_MODE) {
+  // Ignorer les retain au démarrage (mode + paramètres) pour éviter
+  // que les valeurs retain HA n'écrasent celles chargées depuis la NVS.
+  // Les commandes porte (OPEN/CLOSE/STOP/RESET) ne sont jamais ignorées.
+  if (millis() < ignoreRetainUntil && String(topic) != TOPIC_COMMANDE_PORTE) {
     Serial.println("[MQTT] Retain ignoré (démarrage)");
     return;
   }
@@ -705,6 +754,23 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       wsBroadcastState();
     }
   }
+  // ── Paramètres individuels (entités number HA) ──────────────
+  else if (String(topic) == TOPIC_OFFSET_OUV) { offsetOuv = msg.toInt();          paramModifie(); }
+  else if (String(topic) == TOPIC_OFFSET_FER) { offsetFer = msg.toInt();          paramModifie(); }
+  else if (String(topic) == TOPIC_LUX_OUV)    { luxSeuilOuverture = msg.toFloat(); paramModifie(); }
+  else if (String(topic) == TOPIC_LUX_FER)    { luxSeuilFermeture = msg.toFloat(); paramModifie(); }
+  else if (String(topic) == TOPIC_HFX_OUV_H)  { heureFixeOuvH = msg.toInt();       paramModifie(); }
+  else if (String(topic) == TOPIC_HFX_OUV_M)  { heureFixeOuvM = msg.toInt();       paramModifie(); }
+  else if (String(topic) == TOPIC_HFX_FER_H)  { heureFixeFerH = msg.toInt();       paramModifie(); }
+  else if (String(topic) == TOPIC_HFX_FER_M)  { heureFixeFerM = msg.toInt();       paramModifie(); }
+}
+
+// Appelé après modification d'un paramètre : sauvegarde + republie état
+void paramModifie() {
+  sauvegarderConfig();
+  publishParams();
+  publishHeuresSoleil();
+  wsBroadcastState();
 }
 
 bool connecterMQTT() {
@@ -717,9 +783,18 @@ bool connecterMQTT() {
     mqtt.subscribe(TOPIC_COMMANDE_PORTE);
     mqtt.subscribe(TOPIC_MODE);
     mqtt.subscribe(TOPIC_CONFIG);
+    mqtt.subscribe(TOPIC_OFFSET_OUV);
+    mqtt.subscribe(TOPIC_OFFSET_FER);
+    mqtt.subscribe(TOPIC_LUX_OUV);
+    mqtt.subscribe(TOPIC_LUX_FER);
+    mqtt.subscribe(TOPIC_HFX_OUV_H);
+    mqtt.subscribe(TOPIC_HFX_OUV_M);
+    mqtt.subscribe(TOPIC_HFX_FER_H);
+    mqtt.subscribe(TOPIC_HFX_FER_M);
     publishDiscovery();      // auto-déclaration des entités HA
     publishEtat();
     publishMode();
+    publishParams();
     publishWifi();
     ignoreRetainUntil = millis() + 3000;  // ignorer les retain pendant 3s
     return true;
@@ -805,7 +880,113 @@ void publishDiscovery() {
     "%s}", HA_DEVICE);
   mqtt.publish(topic, buf, true);
 
-  Serial.println("[MQTT] Discovery publié");
+  // ── Sensor état texte ──────────────────────────────────────
+  snprintf(topic, sizeof(topic), HA_PREFIX "/sensor/poulailler/etat/config");
+  snprintf(buf, sizeof(buf),
+    "{\"name\":\"Etat porte\",\"unique_id\":\"poulailler_etat\","
+    "\"state_topic\":\"" TOPIC_ETAT_TEXTE "\","
+    "\"icon\":\"mdi:door\","
+    "%s}", HA_DEVICE);
+  mqtt.publish(topic, buf, true);
+
+  // ── Binary sensor FDC ouvert ───────────────────────────────
+  snprintf(topic, sizeof(topic), HA_PREFIX "/binary_sensor/poulailler/fdc_ouv/config");
+  snprintf(buf, sizeof(buf),
+    "{\"name\":\"Fin de course ouvert\",\"unique_id\":\"poulailler_fdc_ouv\","
+    "\"state_topic\":\"" TOPIC_FDC_OUV "\","
+    "\"payload_on\":\"ON\",\"payload_off\":\"OFF\",\"icon\":\"mdi:arrow-left-bold\","
+    "\"entity_category\":\"diagnostic\","
+    "%s}", HA_DEVICE);
+  mqtt.publish(topic, buf, true);
+
+  // ── Binary sensor FDC fermé ────────────────────────────────
+  snprintf(topic, sizeof(topic), HA_PREFIX "/binary_sensor/poulailler/fdc_fer/config");
+  snprintf(buf, sizeof(buf),
+    "{\"name\":\"Fin de course ferme\",\"unique_id\":\"poulailler_fdc_fer\","
+    "\"state_topic\":\"" TOPIC_FDC_FER "\","
+    "\"payload_on\":\"ON\",\"payload_off\":\"OFF\",\"icon\":\"mdi:arrow-right-bold\","
+    "\"entity_category\":\"diagnostic\","
+    "%s}", HA_DEVICE);
+  mqtt.publish(topic, buf, true);
+
+  // ── Number : offset ouverture soleil ───────────────────────
+  snprintf(topic, sizeof(topic), HA_PREFIX "/number/poulailler/offset_ouv/config");
+  snprintf(buf, sizeof(buf),
+    "{\"name\":\"Offset ouverture\",\"unique_id\":\"poulailler_offset_ouv\","
+    "\"command_topic\":\"" TOPIC_OFFSET_OUV "\",\"state_topic\":\"" TOPIC_OFFSET_OUV "\","
+    "\"min\":-60,\"max\":120,\"step\":1,\"unit_of_measurement\":\"min\","
+    "\"mode\":\"slider\",\"icon\":\"mdi:weather-sunset-up\","
+    "%s}", HA_DEVICE);
+  mqtt.publish(topic, buf, true);
+
+  // ── Number : offset fermeture soleil ───────────────────────
+  snprintf(topic, sizeof(topic), HA_PREFIX "/number/poulailler/offset_fer/config");
+  snprintf(buf, sizeof(buf),
+    "{\"name\":\"Offset fermeture\",\"unique_id\":\"poulailler_offset_fer\","
+    "\"command_topic\":\"" TOPIC_OFFSET_FER "\",\"state_topic\":\"" TOPIC_OFFSET_FER "\","
+    "\"min\":-60,\"max\":120,\"step\":1,\"unit_of_measurement\":\"min\","
+    "\"mode\":\"slider\",\"icon\":\"mdi:weather-sunset-down\","
+    "%s}", HA_DEVICE);
+  mqtt.publish(topic, buf, true);
+
+  // ── Number : seuil lux ouverture ───────────────────────────
+  snprintf(topic, sizeof(topic), HA_PREFIX "/number/poulailler/lux_ouv/config");
+  snprintf(buf, sizeof(buf),
+    "{\"name\":\"Seuil lux ouverture\",\"unique_id\":\"poulailler_lux_ouv\","
+    "\"command_topic\":\"" TOPIC_LUX_OUV "\",\"state_topic\":\"" TOPIC_LUX_OUV "\","
+    "\"min\":0,\"max\":2000,\"step\":10,\"unit_of_measurement\":\"lx\","
+    "\"mode\":\"box\",\"icon\":\"mdi:brightness-6\","
+    "%s}", HA_DEVICE);
+  mqtt.publish(topic, buf, true);
+
+  // ── Number : seuil lux fermeture ───────────────────────────
+  snprintf(topic, sizeof(topic), HA_PREFIX "/number/poulailler/lux_fer/config");
+  snprintf(buf, sizeof(buf),
+    "{\"name\":\"Seuil lux fermeture\",\"unique_id\":\"poulailler_lux_fer\","
+    "\"command_topic\":\"" TOPIC_LUX_FER "\",\"state_topic\":\"" TOPIC_LUX_FER "\","
+    "\"min\":0,\"max\":2000,\"step\":10,\"unit_of_measurement\":\"lx\","
+    "\"mode\":\"box\",\"icon\":\"mdi:brightness-4\","
+    "%s}", HA_DEVICE);
+  mqtt.publish(topic, buf, true);
+
+  // ── Number : heure fixe ouverture (H) ──────────────────────
+  snprintf(topic, sizeof(topic), HA_PREFIX "/number/poulailler/hfx_ouv_h/config");
+  snprintf(buf, sizeof(buf),
+    "{\"name\":\"Heure fixe ouverture (h)\",\"unique_id\":\"poulailler_hfx_ouv_h\","
+    "\"command_topic\":\"" TOPIC_HFX_OUV_H "\",\"state_topic\":\"" TOPIC_HFX_OUV_H "\","
+    "\"min\":0,\"max\":23,\"step\":1,\"mode\":\"box\",\"icon\":\"mdi:clock-outline\","
+    "%s}", HA_DEVICE);
+  mqtt.publish(topic, buf, true);
+
+  // ── Number : heure fixe ouverture (M) ──────────────────────
+  snprintf(topic, sizeof(topic), HA_PREFIX "/number/poulailler/hfx_ouv_m/config");
+  snprintf(buf, sizeof(buf),
+    "{\"name\":\"Minute fixe ouverture\",\"unique_id\":\"poulailler_hfx_ouv_m\","
+    "\"command_topic\":\"" TOPIC_HFX_OUV_M "\",\"state_topic\":\"" TOPIC_HFX_OUV_M "\","
+    "\"min\":0,\"max\":59,\"step\":1,\"mode\":\"box\",\"icon\":\"mdi:clock-outline\","
+    "%s}", HA_DEVICE);
+  mqtt.publish(topic, buf, true);
+
+  // ── Number : heure fixe fermeture (H) ──────────────────────
+  snprintf(topic, sizeof(topic), HA_PREFIX "/number/poulailler/hfx_fer_h/config");
+  snprintf(buf, sizeof(buf),
+    "{\"name\":\"Heure fixe fermeture (h)\",\"unique_id\":\"poulailler_hfx_fer_h\","
+    "\"command_topic\":\"" TOPIC_HFX_FER_H "\",\"state_topic\":\"" TOPIC_HFX_FER_H "\","
+    "\"min\":0,\"max\":23,\"step\":1,\"mode\":\"box\",\"icon\":\"mdi:clock-outline\","
+    "%s}", HA_DEVICE);
+  mqtt.publish(topic, buf, true);
+
+  // ── Number : heure fixe fermeture (M) ──────────────────────
+  snprintf(topic, sizeof(topic), HA_PREFIX "/number/poulailler/hfx_fer_m/config");
+  snprintf(buf, sizeof(buf),
+    "{\"name\":\"Minute fixe fermeture\",\"unique_id\":\"poulailler_hfx_fer_m\","
+    "\"command_topic\":\"" TOPIC_HFX_FER_M "\",\"state_topic\":\"" TOPIC_HFX_FER_M "\","
+    "\"min\":0,\"max\":59,\"step\":1,\"mode\":\"box\",\"icon\":\"mdi:clock-outline\","
+    "%s}", HA_DEVICE);
+  bool ok = mqtt.publish(topic, buf, true);
+
+  if (ok) Serial.println("[MQTT] Discovery publié");
+  else    Serial.println("[MQTT] Discovery ÉCHEC — buffer trop petit ?");
 }
 
 // ============================================================
@@ -899,6 +1080,7 @@ void setup() {
   if (MQTT_ENABLED) {
     mqtt.setServer(MQTT_SERVER, MQTT_PORT);
     mqtt.setCallback(mqttCallback);
+    mqtt.setBufferSize(768);  // défaut 256 trop petit pour les messages Discovery HA
     connecterMQTT();
   }
 
