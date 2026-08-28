@@ -92,7 +92,7 @@ Paramètres de carte :
 | CPU Frequency | 240MHz (WiFi/BT) |
 | Flash Mode | DIO |
 | Flash Size | 4MB (32Mb) |
-| Partition Scheme | Default 4MB with spiffs |
+| Partition Scheme | DMinimal SPIFFS (1.9MB APP with OTA) |
 | PSRAM | Disabled |
 
 ---
@@ -375,7 +375,7 @@ Board settings:
 | CPU Frequency | 240MHz (WiFi/BT) |
 | Flash Mode | DIO |
 | Flash Size | 4MB (32Mb) |
-| Partition Scheme | Default 4MB with spiffs |
+| Partition Scheme | Minimal SPIFFS (1.9MB APP with OTA) |
 | PSRAM | Disabled |
 
 ---
